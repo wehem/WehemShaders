@@ -310,9 +310,9 @@ float4 TAA(float2 texcoord)
     antialiased = lerp(antialiased * antialiased, BB * BB, mixRate);
     antialiased = sqrt(antialiased);
 
-	const float2 XYoffset[8] = { float2( 0,+pix.y ), float2( 0,-pix.y), float2(+pix.x, 0), float2(-pix.x, 0), float2(-pix.x,-pix.y), float2(+pix.x,-pix.y), float2(-pix.x,+pix.y), float2(+pix.x,+pix.y) };
+    const float2 XYoffset[8] = { float2( 0,+pix.y ), float2( 0,-pix.y), float2(+pix.x, 0), float2(-pix.x, 0), float2(-pix.x,-pix.y), float2(+pix.x,-pix.y), float2(-pix.x,+pix.y), float2(+pix.x,+pix.y) };
 
-	float3 minColor = encodePalYuv(BB) - MB;
+    float3 minColor = encodePalYuv(BB) - MB;
     float3 maxColor = encodePalYuv(BB) + MB;
     for(int i = 0; i < 8; ++i) {
         float3 neighbor = encodePalYuv(tex2Dlod(BackBuffer, float4(texcoord + XYoffset[i], 0, 0)).rgb);
