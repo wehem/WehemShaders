@@ -1,8 +1,4 @@
- ////-------//
- ///**TAA**///
- //-------////
-
- //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
  //* Temporal AA "Epic Games" implementation + Some Magic:
  //* For ReShade 3.0+ v 1.1
  //*  ---------------------------------
@@ -115,6 +111,14 @@ uniform bool EnableJitter <
     ui_label = "Enable Jitter";
     ui_category = "TAA";
 > = false;
+
+uniform int Jitter_Samples <
+    ui_type = "slider";
+    ui_min = 2.0; ui_max = 32.0; ui_step = 1.0;
+    ui_label = "Halton Jittering Samples";
+    ui_tooltip = "Adjust the number of Halton jittering samples (up to 32).";
+    ui_category = "TAA";
+> = 8;
 
 //Depth Map//
 uniform int Debug <
@@ -284,8 +288,8 @@ float4 TAA(float2 texcoord)
 {   
     float2 jitterDeltaUV = 0.0;
     if (EnableJitter) {
-        int currentJitterIndex = framecount % 8;
-        int previousJitterIndex = (framecount - 1) % 8;
+        int currentJitterIndex = framecount % Jitter_Samples;
+        int previousJitterIndex = (framecount - 1) % Jitter_Samples;
         float2 currentJitter = (Halton23(currentJitterIndex) - 0.5) * 0.5;
         float2 previousJitter = (Halton23(previousJitterIndex) - 0.5) * 0.5;
         jitterDeltaUV = (previousJitter - currentJitter) * float2(1.0 / BUFFER_WIDTH, 1.0 / BUFFER_HEIGHT);
@@ -294,16 +298,23 @@ float4 TAA(float2 texcoord)
     float M_Similarity = 1 - abs(Similarity);
     float currentDepth = DepthM(texcoord).y;
     float previousDepth = tex2D(PSDepthBuffer, texcoord + jitterDeltaUV).x;
-    float D_Similarity = saturate(pow(abs(currentDepth / previousDepth), 100) + M_Similarity);
+    
+    // Improved depth similarity calculation
+    float depthDiff = abs(currentDepth - previousDepth);
+    float depthSigma = 100.0 * (1.0 - Similarity);
+    float D_Similarity = exp(-depthDiff * depthSigma) + M_Similarity;
+    D_Similarity = saturate(D_Similarity);
+
     float S_Velocity = 12.5 * lerp(1, 80, Delta_Power);
-    float V_Buffer = saturate(distance(currentDepth, previousDepth) * S_Velocity);
+    float V_Buffer = saturate(depthDiff * S_Velocity);
 
     float Per = 1 - Persistence;
     float4 PastColor = tex2Dlod(PBackBuffer, float4(texcoord + jitterDeltaUV, 0, 0));
     PastColor = (1 - Per) * tex2D(BackBuffer, texcoord) + Per * PastColor;
 
     float3 antialiased = PastColor.xyz;
-    float mixRate = min(PastColor.w, 0.5), MB = Clamping_Adjust;
+    float mixRate = min(PastColor.w, 0.5);
+    float MB = Clamping_Adjust;
 
     float3 BB = tex2D(BackBuffer, texcoord).xyz;
 
@@ -312,15 +323,24 @@ float4 TAA(float2 texcoord)
 
     const float2 XYoffset[8] = { float2( 0,+pix.y ), float2( 0,-pix.y), float2(+pix.x, 0), float2(-pix.x, 0), float2(-pix.x,-pix.y), float2(+pix.x,-pix.y), float2(-pix.x,+pix.y), float2(+pix.x,+pix.y) };
 
-    float3 minColor = encodePalYuv(BB) - MB;
-    float3 maxColor = encodePalYuv(BB) + MB;
+    // Variance-based clamping
+    float3 centerYUV = encodePalYuv(BB);
+    float3 sum = centerYUV;
+    float3 sumSq = centerYUV * centerYUV;
+
     for(int i = 0; i < 8; ++i) {
-        float3 neighbor = encodePalYuv(tex2Dlod(BackBuffer, float4(texcoord + XYoffset[i], 0, 0)).rgb);
-        minColor = min(minColor, neighbor);
-        maxColor = max(maxColor, neighbor);
+        float3 neighborYUV = encodePalYuv(tex2Dlod(BackBuffer, float4(texcoord + XYoffset[i], 0, 0)).rgb);
+        sum += neighborYUV;
+        sumSq += neighborYUV * neighborYUV;
     }
-    minColor -= MB;
-    maxColor += MB;
+
+    float3 mean = sum / 9.0;
+    float3 variance = sumSq / 9.0 - mean * mean;
+    float3 stdDev = sqrt(max(variance, 0.0));
+    
+    float gamma = 1.0 + Clamping_Adjust * 10.0;
+    float3 minColor = mean - gamma * stdDev;
+    float3 maxColor = mean + gamma * stdDev;
 
     antialiased = clamp(encodePalYuv(antialiased), minColor, maxColor);
     mixRate = rcp(1.0 / mixRate + 1.0);
@@ -330,13 +350,19 @@ float4 TAA(float2 texcoord)
     if (Delta == 1)
         diff = V_Buffer;
 
-    float clampAmount = diff;
+    // Enhanced mixRate calculation with non-linear response
+    float clampAmount = pow(diff, 2.0);
     mixRate += clampAmount;
     mixRate = clamp(mixRate, 0.05, 0.5);
+
+    // Disocclusion handling
+    float depthDisocclusion = currentDepth < previousDepth ? 1.0 : 0.0;
+    mixRate = lerp(mixRate, 0.5, depthDisocclusion * 0.5);
 
     antialiased = decodePalYuv(antialiased);
     float4 Output = Similarity > 0 ? lerp(float4(BB, 1), float4(antialiased, mixRate), D_Similarity) : float4(lerp(BB, antialiased, D_Similarity), mixRate);
 
+    // Debug views remain unchanged
     if (Debug == 1)
         Output = diff;
     else if (Debug == 2)    
@@ -467,7 +493,7 @@ void PostProcessVS(in uint id : SV_VertexID, out float4 position : SV_Position, 
     position = float4(texcoord * float2(2.0, -2.0) + float2(-1.0, 1.0), 0.0, 1.0);
 
     if (EnableJitter) {
-        int jitterIndex = framecount % 8;
+        int jitterIndex = framecount % Jitter_Samples;
         float2 jitter = (Halton23(jitterIndex) - 0.5) * 0.5;
         float2 pixoff = float2(1.0 / BUFFER_WIDTH, 1.0 / BUFFER_HEIGHT);
         float2 jitterOffset = jitter * float2(2.0 * pixoff.x, -2.0 * pixoff.y);
