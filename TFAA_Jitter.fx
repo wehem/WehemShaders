@@ -18,6 +18,25 @@ uniform float frametime < source = "frametime"; >;
 
 // Constant for temporal weights adjustment based on a 48 FPS baseline.
 static const float fpsConst = (1000.0 / 48.0);
+// Precomputed Poisson Disk samples (16 samples in 2D)
+static const float2 poissonSamples[16] = {
+    float2(0.5000, 0.5000),
+    float2(0.2500, 0.2500),
+    float2(0.7500, 0.2500),
+    float2(0.2500, 0.7500),
+    float2(0.7500, 0.7500),
+    float2(0.1250, 0.1250),
+    float2(0.3750, 0.1250),
+    float2(0.6250, 0.1250),
+    float2(0.8750, 0.1250),
+    float2(0.1250, 0.3750),
+    float2(0.3750, 0.3750),
+    float2(0.6250, 0.3750),
+    float2(0.8750, 0.3750),
+    float2(0.1250, 0.6250),
+    float2(0.3750, 0.6250),
+    float2(0.6250, 0.6250)
+};
 
 
 /*=============================================================================
@@ -62,10 +81,10 @@ uniform float UI_JITTER_STRENGTH  <
 
 uniform int UI_JITTER_PATTERN  <
     ui_type    = "combo";
-    ui_items   = "Sobol Sequence\0Grid Aligned\0Random\0Halton Sequence\0";
+    ui_items   = "Sobol Sequence\0Grid Aligned\0Random\0Halton Sequence\0Poisson Disk\0";
     ui_label   = "Jitter Pattern";
     ui_category= "Temporal Filter";
-    ui_tooltip = "Selects jittering algorithm (Sobol recommended)";
+    ui_tooltip = "Selects jittering algorithm (Sobol/Halton/Poisson recommended)";
 > = 0;
 
 /*=============================================================================
@@ -359,6 +378,18 @@ float2 GenerateJitter(uint x, uint y, uint frame) {
         float x_jitter = Halton(pixelIndex + frame, 2);
         float y_jitter = Halton(pixelIndex + frame, 3);
         return float2(x_jitter, y_jitter) * UI_JITTER_STRENGTH * ReShade::PixelSize;
+    }
+    if (UI_JITTER_PATTERN == 4) { // Poisson Disk
+        uint seed = x ^ y + frame * 1122334455;
+        uint sampleIndex = (seed % 16); // 16 precomputed samples
+        float2 diskSample = poissonSamples[sampleIndex];
+        // Add frame-dependent rotation
+        float angle = 6.2831853 * (frame % 8) / 8.0;
+        float s = sin(angle), c = cos(angle);
+        return float2(
+            diskSample.x * c - diskSample.y * s,
+            diskSample.x * s + diskSample.y * c
+        ) * UI_JITTER_STRENGTH * ReShade::PixelSize;
     }
     
     // Default Sobol sequence
