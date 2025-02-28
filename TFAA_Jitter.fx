@@ -18,24 +18,19 @@ uniform float frametime < source = "frametime"; >;
 
 // Constant for temporal weights adjustment based on a 48 FPS baseline.
 static const float fpsConst = (1000.0 / 48.0);
-// Precomputed Poisson Disk samples (16 samples in 2D)
-static const float2 poissonSamples[16] = {
-    float2(0.5000, 0.5000),
-    float2(0.2500, 0.2500),
-    float2(0.7500, 0.2500),
-    float2(0.2500, 0.7500),
-    float2(0.7500, 0.7500),
-    float2(0.1250, 0.1250),
-    float2(0.3750, 0.1250),
-    float2(0.6250, 0.1250),
-    float2(0.8750, 0.1250),
-    float2(0.1250, 0.3750),
-    float2(0.3750, 0.3750),
-    float2(0.6250, 0.3750),
-    float2(0.8750, 0.3750),
-    float2(0.1250, 0.6250),
-    float2(0.3750, 0.6250),
-    float2(0.6250, 0.6250)
+// Precomputed Poisson Disk samples (32 samples in 2D)
+static const float2 poissonSamples[32] = {
+    float2(0.5000, 0.5000), float2(0.2500, 0.2500), float2(0.7500, 0.2500),
+    float2(0.2500, 0.7500), float2(0.7500, 0.7500), float2(0.1250, 0.1250),
+    float2(0.3750, 0.1250), float2(0.6250, 0.1250), float2(0.8750, 0.1250),
+    float2(0.1250, 0.3750), float2(0.3750, 0.3750), float2(0.6250, 0.3750),
+    float2(0.8750, 0.3750), float2(0.1250, 0.6250), float2(0.3750, 0.6250),
+    float2(0.6250, 0.6250), float2(0.3750, 0.8750), float2(0.6250, 0.8750),
+    float2(0.1250, 0.8750), float2(0.8750, 0.6250), float2(0.4375, 0.1875),
+    float2(0.5625, 0.3125), float2(0.3125, 0.4375), float2(0.6875, 0.5625),
+    float2(0.1875, 0.6875), float2(0.8125, 0.8125), float2(0.0625, 0.5625),
+    float2(0.9375, 0.4375), float2(0.4375, 0.9375), float2(0.5625, 0.0625),
+    float2(0.21875, 0.28125), float2(0.78125, 0.71875)
 };
 
 
@@ -380,16 +375,20 @@ float2 GenerateJitter(uint x, uint y, uint frame) {
         return float2(x_jitter, y_jitter) * UI_JITTER_STRENGTH * ReShade::PixelSize;
     }
     if (UI_JITTER_PATTERN == 4) { // Poisson Disk
-        uint seed = x ^ y + frame * 1122334455;
-        uint sampleIndex = (seed % 16); // 16 precomputed samples
-        float2 diskSample = poissonSamples[sampleIndex];
-        // Add frame-dependent rotation
-        float angle = 6.2831853 * (frame % 8) / 8.0;
+        uint seed = x * 16807 + y * 331u + frame * 1122334455u;
+        uint sampleIndex = (seed % 32); // 32 samples
+        
+        // Adaptive rotation based on pixel hash
+        float hash = frac(sin(seed) * 43758.5453);
+        float angle = 6.2831853 * hash; // Full 0-2π rotation
+        
         float s = sin(angle), c = cos(angle);
-        return float2(
-            diskSample.x * c - diskSample.y * s,
-            diskSample.x * s + diskSample.y * c
-        ) * UI_JITTER_STRENGTH * ReShade::PixelSize;
+        float2 rotated = float2(
+            poissonSamples[sampleIndex].x * c - poissonSamples[sampleIndex].y * s,
+            poissonSamples[sampleIndex].x * s + poissonSamples[sampleIndex].y * c
+        );
+        
+        return rotated * UI_JITTER_STRENGTH * ReShade::PixelSize;
     }
     
     // Default Sobol sequence
